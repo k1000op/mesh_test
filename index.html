@@ -26,13 +26,13 @@
 <body>
   <div id="three-container"></div>
 
-  <!-- Usamos ES Modules desde unpkg, mucho más robusto -->
+  <!-- IMPORTS COMO ES MODULES DESDE UNPKG (MUY IMPORTANTE) -->
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
     import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
 
-    // MODELOS (están en el mismo repo/dir que index.html)
+    // MODELOS (archivos .glb en este MISMO repo)
     const MODEL_A_URL = './mesh01_v1.glb';
     const MODEL_B_URL = './vela01.glb';
 
@@ -254,3 +254,4 @@
   </script>
 </body>
 </html>
+
