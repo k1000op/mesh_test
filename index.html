@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nube de puntos morph</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, sans-serif;
+    }
+    #three-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="three-container"></div>
+
+  <!-- Usamos ES Modules desde unpkg, mucho más robusto -->
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
+    import { GLTFLoader } from 'https://unpkg.com/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js';
+
+    // MODELOS (están en el mismo repo/dir que index.html)
+    const MODEL_A_URL = './mesh01_v1.glb';
+    const MODEL_B_URL = './vela01.glb';
+
+    const COLOR_A = new THREE.Color(0xffffff);
+    const COLOR_B = new THREE.Color(0xffaa33);
+    const BASE_POINT_SIZE = 0.00001;
+
+    const container = document.getElementById('three-container');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      1000
+    );
+    camera.position.set(0, 0.4, 3);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    let points, pointsMaterial, morphGeometry;
+    let startPositions, endPositions;
+    let numPoints = 0;
+
+    let t = 0;
+    let direction = 1;
+    const morphSpeed = 0.005;
+
+    let holdFramesAtEnd = 350;
+    let holdCounter = 0;
+    let holdingAtEnd = false;
+
+    const loader = new GLTFLoader();
+
+    function loadGLB(url) {
+      return new Promise((resolve, reject) => {
+        loader.load(
+          url,
+          (gltf) => {
+            let mesh = null;
+            gltf.scene.traverse((child) => {
+              if (child.isMesh && !mesh) mesh = child;
+            });
+            if (!mesh) {
+              reject('No mesh in GLB: ' + url);
+              return;
+            }
+
+            let geom = mesh.geometry.clone();
+            if (geom.index) geom = geom.toNonIndexed();
+
+            geom.computeBoundingBox();
+            const box = geom.boundingBox;
+            const size = new THREE.Vector3();
+            const center = new THREE.Vector3();
+            box.getSize(size);
+            box.getCenter(center);
+
+            const pos = geom.getAttribute('position');
+
+            // Centrar
+            for (let i = 0; i < pos.count; i++) {
+              pos.setXYZ(
+                i,
+                pos.getX(i) - center.x,
+                pos.getY(i) - center.y,
+                pos.getZ(i) - center.z
+              );
+            }
+
+            // Escalar a unidad
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const scale = maxDim > 0 ? 1 / maxDim : 1;
+            for (let i = 0; i < pos.count; i++) {
+              pos.setXYZ(
+                i,
+                pos.getX(i) * scale,
+                pos.getY(i) * scale,
+                pos.getZ(i) * scale
+              );
+            }
+
+            resolve(geom);
+          },
+          undefined,
+          reject
+        );
+      });
+    }
+
+    async function loadAndMorph() {
+      try {
+        const geomA = await loadGLB(MODEL_A_URL);
+        const geomB = await loadGLB(MODEL_B_URL);
+
+        const posA = geomA.getAttribute('position');
+        const posB = geomB.getAttribute('position');
+
+        numPoints = Math.min(posA.count, posB.count);
+
+        startPositions = new Float32Array(numPoints * 3);
+        endPositions   = new Float32Array(numPoints * 3);
+
+        for (let i = 0; i < numPoints; i++) {
+          const i3 = i * 3;
+          startPositions[i3]     = posA.getX(i);
+          startPositions[i3 + 1] = posA.getY(i);
+          startPositions[i3 + 2] = posA.getZ(i);
+
+          endPositions[i3]       = posB.getX(i);
+          endPositions[i3 + 1]   = posB.getY(i);
+          endPositions[i3 + 2]   = posB.getZ(i);
+        }
+
+        morphGeometry = new THREE.BufferGeometry();
+        const current = new Float32Array(numPoints * 3);
+        current.set(startPositions);
+        morphGeometry.setAttribute(
+          'position',
+          new THREE.BufferAttribute(current, 3)
+        );
+
+        pointsMaterial = new THREE.PointsMaterial({
+          size: BASE_POINT_SIZE,
+          color: COLOR_A.clone(),
+          sizeAttenuation: true
+        });
+
+        points = new THREE.Points(morphGeometry, pointsMaterial);
+        scene.add(points);
+
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        animate();
+      } catch (e) {
+        console.error('Error cargando modelos:', e);
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (points && morphGeometry && pointsMaterial) {
+        if (!holdingAtEnd) {
+          t += morphSpeed * direction;
+        }
+
+        if (t >= 1) {
+          t = 1;
+          if (!holdingAtEnd) {
+            holdingAtEnd = true;
+            holdCounter = holdFramesAtEnd;
+          } else {
+            holdCounter--;
+            if (holdCounter <= 0) {
+              holdingAtEnd = false;
+              direction = -1;
+            }
+          }
+        }
+
+        if (t <= 0) {
+          t = 0;
+          direction = 1;
+        }
+
+        const arr = morphGeometry.getAttribute('position').array;
+        for (let i = 0; i < arr.length; i++) {
+          arr[i] = THREE.MathUtils.lerp(startPositions[i], endPositions[i], t);
+        }
+        morphGeometry.getAttribute('position').needsUpdate = true;
+
+        // COLOR + DESTELLO
+        const mixedColor = COLOR_A.clone().lerp(COLOR_B, t);
+
+        let flash = 0.0;
+        if (holdingAtEnd) {
+          const progress = 1 - holdCounter / holdFramesAtEnd; // 0→1
+          flash = Math.sin(progress * Math.PI);                // 0→1→0
+        } else if (t > 0.9 && direction === 1) {
+          const local = (t - 0.9) / 0.1;
+          flash = Math.sin(local * Math.PI * 0.5);
+        }
+
+        const flashIntensity = 1 + flash * 1.5;
+        mixedColor.multiplyScalar(flashIntensity);
+        mixedColor.r = Math.min(mixedColor.r, 1);
+        mixedColor.g = Math.min(mixedColor.g, 1);
+        mixedColor.b = Math.min(mixedColor.b, 1);
+
+        pointsMaterial.color.set(mixedColor);
+        pointsMaterial.size = BASE_POINT_SIZE * (1 + flash * 3.0);
+
+        points.rotation.y += 0.0006;
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    loadAndMorph();
+
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    });
+  </script>
+</body>
+</html>
